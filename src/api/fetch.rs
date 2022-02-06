@@ -23,22 +23,24 @@ pub async fn fetch_file(key: &str) -> Result<Vec<u8>, Error> {
     let header = get_header(&get_url(key)).await.unwrap();
     let mut data: Vec<Vec<u8>> = Vec::with_capacity(header.length as usize);
     let mut i = 1;
-    let stream = stream::iter(0..header.length)
-        .map(|_| {
-            let url = get_url(&format!("{}_{}", key, i));
-            i += 1;
-            async move {
-                let res = get_json(&url).await.unwrap();
-                println!("{}", res.data);
-                (i, res.get_data())
-            }
+    let mut requests = Vec::with_capacity(header.length as usize);
+    for _ in 0..header.length {
+        let url = get_url(&format!("{}_{}", key, i));
+        i += 1;
+        requests.push(async move {
+            let res = get_json(&url).await.unwrap();
+            (i, res.get_data())
         })
-        .buffer_unordered(CONCURRENT_REQUESTS);
-    let mut_data: Vec<Vec<u8>> = stream
-        .map(|(i, x)| async move { x })
-        .collect::<FuturesUnordered<_>>()
-        .collect()
-        .await;
-    let data_vec: Vec<u8> = mut_data.into_iter().flatten().collect();
+    }
+    let stream = stream::iter(requests).buffer_unordered(CONCURRENT_REQUESTS);
+    let mut responses: Vec<(usize, Vec<u8>)> = stream.collect::<Vec<_>>().await;
+    responses.sort_by_key(|(i, _)| *i);
+
+    let data_vec: Vec<u8> = responses
+        .iter()
+        .map(|(_, data)| data.to_owned())
+        .flatten()
+        .collect();
+
     Ok(data_vec)
 }
